@@ -212,6 +212,12 @@ namespace mmw_preview
         float speed{1.0f};
     };
 
+    struct SEVolumeChange
+    {
+        int tick{};
+        float volume{1.0f};
+    };
+
     struct Note
     {
         NoteType type{NoteType::Tap};
@@ -220,6 +226,7 @@ namespace mmw_preview
         int tick{};
         int lane{};
         int width{3};
+        float speedRatio{1.0f};
         bool critical{false};
         bool friction{false};
         FlickType flick{FlickType::None};
@@ -266,6 +273,7 @@ namespace mmw_preview
         std::map<int, HoldNote> holdNotes;
         std::vector<Tempo> tempoChanges;
         std::vector<HiSpeedChange> hiSpeedChanges;
+        std::vector<SEVolumeChange> seVolumeChanges;
     };
 
     struct SUSNote
@@ -274,6 +282,7 @@ namespace mmw_preview
         int lane{};
         int width{};
         int type{};
+        float speedRatio{1.0f};
     };
 
     struct BPM
@@ -301,6 +310,12 @@ namespace mmw_preview
         float speed{};
     };
 
+    struct SEVolume
+    {
+        int tick{};
+        float volume{};
+    };
+
     struct SUSMetadata
     {
         std::map<std::string, std::string> data;
@@ -319,6 +334,7 @@ namespace mmw_preview
         std::vector<BPM> bpms;
         std::vector<BarLength> barlengths;
         std::vector<HiSpeed> hiSpeeds;
+        std::vector<SEVolume> seVolumes;
     };
 
     struct DrawingNote
@@ -331,6 +347,7 @@ namespace mmw_preview
     {
         Range xPos{};
         Range visualTime{};
+        float visibleDuration{};
     };
 
     struct DrawingHoldTick
@@ -338,6 +355,7 @@ namespace mmw_preview
         int refID{};
         float center{};
         Range visualTime{};
+        float visibleDuration{};
     };
 
     struct DrawingHoldSegment
@@ -356,6 +374,7 @@ namespace mmw_preview
         float startTime{};
         float endTime{};
         double activeTime{};
+        float visibleDuration{};
     };
 
     struct DrawData
@@ -414,6 +433,7 @@ namespace mmw_preview
         float kind{};
         float flags{};
         float endTimeSec{};
+        float volume{1.0f};
     };
 
     enum class HudEventKind : int
@@ -670,6 +690,16 @@ namespace mmw_preview
         return static_cast<float>(lerpD(0.35, 4.0, std::pow(unlerpD(12.0, 1.0, noteSpeed), 1.31)));
     }
 
+    [[nodiscard]] float sanitizeSpeedRatio(float speedRatio)
+    {
+        return std::isfinite(speedRatio) && speedRatio > 0.0f ? speedRatio : 1.0f;
+    }
+
+    [[nodiscard]] float sanitizeSEVolume(float volume)
+    {
+        return std::isfinite(volume) && volume >= 0.0f ? volume : 1.0f;
+    }
+
     [[nodiscard]] double approach(double startTime, double endTime, double currentTime)
     {
         return std::pow(1.06, 45.0 * lerpD(-1.0, 0.0, unlerpD(startTime, endTime, currentTime)));
@@ -697,10 +727,37 @@ namespace mmw_preview
             - ((x & mask4) << 0);
     }
 
+    [[nodiscard]] float getEffectiveSpeedRatio(const Note& note, const Score& score)
+    {
+        float speedRatio = note.speedRatio;
+        if (note.type == NoteType::HoldMid || note.type == NoteType::HoldEnd) {
+            auto parent = score.notes.find(note.parentID);
+            if (parent != score.notes.end()) {
+                speedRatio = parent->second.speedRatio;
+            }
+        }
+        return sanitizeSpeedRatio(speedRatio);
+    }
+
+    [[nodiscard]] float getNoteVisibleDuration(const Note& note, const Score& score, float noteSpeed)
+    {
+        return getNoteDuration(noteSpeed) / getEffectiveSpeedRatio(note, score);
+    }
+
+    [[nodiscard]] float getSEVolumeAtTick(int tick, const Score& score)
+    {
+        for (auto it = score.seVolumeChanges.rbegin(); it != score.seVolumeChanges.rend(); ++it) {
+            if (it->tick <= tick) {
+                return sanitizeSEVolume(it->volume);
+            }
+        }
+        return 1.0f;
+    }
+
     [[nodiscard]] Range getNoteVisualTime(const Note& note, const Score& score, float noteSpeed)
     {
         const double targetTime = accumulateScaledDuration(note.tick, TICKS_PER_BEAT, score.tempoChanges, score.hiSpeedChanges);
-        return {targetTime - getNoteDuration(noteSpeed), targetTime};
+        return {targetTime - getNoteVisibleDuration(note, score, noteSpeed), targetTime};
     }
 
     [[nodiscard]] QuadPoints quadvPos(float left, float right, float top, float bottom)
@@ -1044,6 +1101,7 @@ namespace mmw_preview
 
             float flags = note.critical ? 1.0f : 0.0f;
             float endTimeSec = -1.0f;
+            const float volume = getSEVolumeAtTick(note.tick, gRuntime.score);
             gRuntime.hitEvents.push_back(HitEvent{
                 accumulateDuration(note.tick, TICKS_PER_BEAT, gRuntime.score.tempoChanges),
                 getNoteCenter(note),
@@ -1051,6 +1109,7 @@ namespace mmw_preview
                 kind,
                 flags,
                 endTimeSec,
+                volume,
             });
 
             if (note.type == NoteType::Hold) {
@@ -1064,6 +1123,7 @@ namespace mmw_preview
                         5.0f,
                         flags,
                         accumulateDuration(endNote.tick, TICKS_PER_BEAT, gRuntime.score.tempoChanges),
+                        volume,
                     });
                 }
             }
@@ -1076,7 +1136,7 @@ namespace mmw_preview
             return lhs.timeSec < rhs.timeSec;
         });
 
-        gRuntime.packedHitEvents.reserve(gRuntime.hitEvents.size() * 6);
+        gRuntime.packedHitEvents.reserve(gRuntime.hitEvents.size() * 7);
         for (const auto& event : gRuntime.hitEvents) {
             gRuntime.packedHitEvents.push_back(event.timeSec);
             gRuntime.packedHitEvents.push_back(event.center);
@@ -1084,6 +1144,7 @@ namespace mmw_preview
             gRuntime.packedHitEvents.push_back(event.kind);
             gRuntime.packedHitEvents.push_back(event.flags);
             gRuntime.packedHitEvents.push_back(event.endTimeSec);
+            gRuntime.packedHitEvents.push_back(event.volume);
         }
     }
 
@@ -1399,6 +1460,7 @@ namespace mmw_preview
             std::vector<SusDataLine> noteLines;
             std::vector<SusDataLine> bpmLines;
             std::vector<SusDataLine> hiSpeedLines;
+            std::vector<SusDataLine> seVolumeLines;
 
             std::stringstream stream(text);
             std::string rawLine;
@@ -1425,6 +1487,8 @@ namespace mmw_preview
                         bpmLines.push_back(susLine);
                     } else if (startsWith(header, "TIL")) {
                         hiSpeedLines.push_back(susLine);
+                    } else if (startsWith(header, "VOLUME")) {
+                        seVolumeLines.push_back(susLine);
                     } else {
                         noteLines.push_back(susLine);
                     }
@@ -1438,6 +1502,7 @@ namespace mmw_preview
             bars_ = getBars(sus.barlengths);
             sus.bpms = getBpms(bpmLines);
             sus.hiSpeeds = getHiSpeeds(hiSpeedLines);
+            sus.seVolumes = getSEVolumes(seVolumeLines);
 
             std::map<int, std::vector<SUSNote>> slideStreams;
             std::map<int, std::vector<SUSNote>> guideStreams;
@@ -1546,18 +1611,60 @@ namespace mmw_preview
         [[nodiscard]] std::vector<SUSNote> getNotes(const SusDataLine& line) const
         {
             std::vector<SUSNote> notes;
-            for (size_t i = 0; i + 1 < line.data.size(); i += 2) {
-                if (line.data[i] == '0' && line.data[i + 1] == '0') {
+            const auto cells = getNoteCells(line.data);
+            for (size_t i = 0; i < cells.size(); ++i) {
+                const std::string& data = cells[i].first;
+                if (data.size() < 2 || (data[0] == '0' && data[1] == '0')) {
                     continue;
                 }
                 notes.push_back(SUSNote{
-                    getTicks(line.getEffectiveMeasure(), static_cast<int>(i), static_cast<int>(line.data.size())),
+                    getTicks(line.getEffectiveMeasure(), static_cast<int>(i * 2), static_cast<int>(cells.size() * 2)),
                     static_cast<int>(std::strtoul(line.header.substr(4, 1).c_str(), nullptr, 36)),
-                    static_cast<int>(std::strtoul(line.data.substr(i + 1, 1).c_str(), nullptr, 36)),
-                    static_cast<int>(std::strtoul(line.data.substr(i, 1).c_str(), nullptr, 36)),
+                    static_cast<int>(std::strtoul(data.substr(1, 1).c_str(), nullptr, 36)),
+                    static_cast<int>(std::strtoul(data.substr(0, 1).c_str(), nullptr, 36)),
+                    sanitizeSpeedRatio(cells[i].second),
                 });
             }
             return notes;
+        }
+
+        [[nodiscard]] std::vector<std::pair<std::string, float>> getNoteCells(const std::string& data) const
+        {
+            std::vector<std::pair<std::string, float>> cells;
+            if (data.find(',') == std::string::npos) {
+                for (size_t i = 0; i + 1 < data.size(); i += 2) {
+                    cells.push_back({data.substr(i, 2), 1.0f});
+                }
+                return cells;
+            }
+
+            size_t i = 0;
+            while (i < data.size()) {
+                while (i < data.size() && (std::isspace(static_cast<unsigned char>(data[i])) != 0 || data[i] == ',')) {
+                    ++i;
+                }
+                if (i + 1 >= data.size()) {
+                    break;
+                }
+
+                const std::string noteData = data.substr(i, 2);
+                i += 2;
+
+                float speedRatio = 1.0f;
+                if (i < data.size() && data[i] == ',') {
+                    ++i;
+                    const size_t speedStart = i;
+                    while (i < data.size() && std::isspace(static_cast<unsigned char>(data[i])) == 0 && data[i] != ',') {
+                        ++i;
+                    }
+                    if (i > speedStart) {
+                        speedRatio = std::strtof(data.substr(speedStart, i - speedStart).c_str(), nullptr);
+                    }
+                }
+
+                cells.push_back({noteData, sanitizeSpeedRatio(speedRatio)});
+            }
+            return cells;
         }
 
         [[nodiscard]] std::vector<BPM> getBpms(const std::vector<SusDataLine>& lines) const
@@ -1640,6 +1747,47 @@ namespace mmw_preview
             return hiSpeeds;
         }
 
+        [[nodiscard]] std::vector<SEVolume> getSEVolumes(const std::vector<SusDataLine>& lines) const
+        {
+            std::vector<SEVolume> seVolumes;
+            for (const auto& line : lines) {
+                std::string lineData = line.data;
+                const size_t firstQuote = lineData.find('"');
+                const size_t lastQuote = lineData.find_last_of('"');
+                if (firstQuote == std::string::npos || lastQuote == std::string::npos || lastQuote <= firstQuote) {
+                    continue;
+                }
+                lineData = lineData.substr(firstQuote + 1, lastQuote - firstQuote - 1);
+                if (lineData.empty()) {
+                    continue;
+                }
+
+                for (const auto& change : split(lineData, ',')) {
+                    size_t i1 = 0;
+                    size_t i2 = change.find('\'', i1);
+                    if (i2 == std::string::npos) {
+                        continue;
+                    }
+                    const int measure = std::atoi(change.substr(i1, i2 - i1).c_str());
+
+                    i1 = i2 + 1;
+                    i2 = change.find(':', i1);
+                    if (i2 == std::string::npos) {
+                        continue;
+                    }
+                    const int tick = std::atoi(change.substr(i1, i2 - i1).c_str());
+
+                    i1 = i2 + 1;
+                    const float volume = sanitizeSEVolume(std::strtof(change.substr(i1).c_str(), nullptr));
+                    seVolumes.push_back({getTicks(measure, 0, 1) + tick, volume});
+                }
+            }
+            std::sort(seVolumes.begin(), seVolumes.end(), [](const SEVolume& left, const SEVolume& right) {
+                return left.tick < right.tick;
+            });
+            return seVolumes;
+        }
+
         void processCommand(const std::string& line)
         {
             const size_t keyPos = line.find(' ');
@@ -1706,14 +1854,41 @@ namespace mmw_preview
         std::unordered_set<std::string> slideKeys;
         std::unordered_set<std::string> frictions;
         std::unordered_set<std::string> hiddenHolds;
+        std::unordered_map<std::string, float> noteSpeedRatios;
+
+        auto rememberNoteSpeed = [&](const SUSNote& note) {
+            const float speedRatio = sanitizeSpeedRatio(note.speedRatio);
+            if (std::abs(speedRatio - 1.0f) > 0.0001f) {
+                noteSpeedRatios.insert_or_assign(noteKey(note), speedRatio);
+            }
+        };
+
+        for (const auto& tap : sus.taps) {
+            rememberNoteSpeed(tap);
+        }
+        for (const auto& dir : sus.directionals) {
+            rememberNoteSpeed(dir);
+        }
 
         for (const auto& slide : sus.slides) {
             for (const auto& note : slide) {
+                rememberNoteSpeed(note);
                 if (note.type == 1 || note.type == 2 || note.type == 3 || note.type == 5) {
                     slideKeys.insert(noteKey(note));
                 }
             }
         }
+
+        for (const auto& guide : sus.guides) {
+            for (const auto& note : guide) {
+                rememberNoteSpeed(note);
+            }
+        }
+
+        auto getNoteSpeed = [&](const SUSNote& note) {
+            const auto it = noteSpeedRatios.find(noteKey(note));
+            return it == noteSpeedRatios.end() ? 1.0f : it->second;
+        };
 
         for (const auto& dir : sus.directionals) {
             const std::string key = noteKey(dir);
@@ -1784,6 +1959,7 @@ namespace mmw_preview
             note.tick = tap.tick;
             note.lane = tap.lane - 2;
             note.width = tap.width;
+            note.speedRatio = getNoteSpeed(tap);
             note.critical = criticals.contains(key);
             note.friction = frictions.contains(key);
             auto flickIt = flicks.find(key);
@@ -1828,6 +2004,7 @@ namespace mmw_preview
                             note.tick = susNote.tick;
                             note.lane = susNote.lane - 2;
                             note.width = susNote.width;
+                            note.speedRatio = getNoteSpeed(susNote);
                             note.critical = critical;
                             note.ID = startID;
                             if (isGuide) {
@@ -1846,6 +2023,7 @@ namespace mmw_preview
                             note.tick = susNote.tick;
                             note.lane = susNote.lane - 2;
                             note.width = susNote.width;
+                            note.speedRatio = getNoteSpeed(susNote);
                             note.critical = critical ? true : criticals.contains(key);
                             note.ID = gNextID++;
                             note.parentID = startID;
@@ -1868,6 +2046,7 @@ namespace mmw_preview
                             note.tick = susNote.tick;
                             note.lane = susNote.lane - 2;
                             note.width = susNote.width;
+                            note.speedRatio = getNoteSpeed(susNote);
                             note.critical = critical;
                             note.ID = gNextID++;
                             note.parentID = startID;
@@ -1911,14 +2090,22 @@ namespace mmw_preview
             return lhs.tick < rhs.tick;
         });
 
+        score.seVolumeChanges.reserve(sus.seVolumes.size());
+        for (const auto& seVolume : sus.seVolumes) {
+            score.seVolumeChanges.push_back({seVolume.tick, sanitizeSEVolume(seVolume.volume)});
+        }
+        std::sort(score.seVolumeChanges.begin(), score.seVolumeChanges.end(), [](const SEVolumeChange& lhs, const SEVolumeChange& rhs) {
+            return lhs.tick < rhs.tick;
+        });
+
         return score;
     }
 
     void addHoldNote(DrawData& drawData, const HoldNote& holdNote, const Score& score)
     {
-        const float noteDuration = getNoteDuration(drawData.noteSpeed);
         const Note& startNote = score.notes.at(holdNote.start.ID);
         const Note& endNote = score.notes.at(holdNote.end);
+        const float noteDuration = getNoteVisibleDuration(startNote, score, drawData.noteSpeed);
         float activeTime = accumulateDuration(startNote.tick, TICKS_PER_BEAT, score.tempoChanges);
         float startTime = activeTime;
         struct HoldStepDraw
@@ -1973,6 +2160,7 @@ namespace mmw_preview
                 startTime,
                 endTime,
                 activeTime,
+                noteDuration,
             });
             startTime = endTime;
 
@@ -1993,6 +2181,7 @@ namespace mmw_preview
                     skipStep.ID,
                     skipLeft + (skipRight - skipLeft) / 2.0f,
                     {tickTime - noteDuration, tickTime},
+                    noteDuration,
                 });
                 ++headIndex;
             }
@@ -2003,6 +2192,7 @@ namespace mmw_preview
                     tailNote.ID,
                     getNoteCenter(tailNote),
                     {tickTime - noteDuration, tickTime},
+                    noteDuration,
                 });
             }
 
@@ -2017,6 +2207,9 @@ namespace mmw_preview
         drawData.noteSpeed = gRuntime.config.noteSpeed;
 
         std::map<int, Range> simultaneousBuilder;
+        std::map<int, float> simultaneousDurations;
+        std::map<int, float> simultaneousSpeedRatios;
+        std::unordered_set<int> speedMismatchedSimultaneousTicks;
         for (auto it = score.notes.rbegin(); it != score.notes.rend(); ++it) {
             const Note& note = it->second;
             drawData.maxTicks = std::max(drawData.maxTicks, note.tick);
@@ -2033,7 +2226,17 @@ namespace mmw_preview
             drawData.drawingNotes.push_back({note.ID, getNoteVisualTime(note, score, drawData.noteSpeed)});
 
             const float center = getNoteCenter(note);
+            const float speedRatio = getEffectiveSpeedRatio(note, score);
+            const float visibleDuration = getNoteVisibleDuration(note, score, drawData.noteSpeed);
             auto [rangeIt, inserted] = simultaneousBuilder.try_emplace(note.tick, Range{center, center});
+            auto [durationIt, durationInserted] = simultaneousDurations.try_emplace(note.tick, visibleDuration);
+            if (!durationInserted) {
+                durationIt->second = std::max(durationIt->second, visibleDuration);
+            }
+            auto [speedIt, speedInserted] = simultaneousSpeedRatios.try_emplace(note.tick, speedRatio);
+            if (!speedInserted && std::abs(speedIt->second - speedRatio) > 0.0001f) {
+                speedMismatchedSimultaneousTicks.insert(note.tick);
+            }
             if (!inserted) {
                 rangeIt->second.min = std::min(rangeIt->second.min, static_cast<double>(center));
                 rangeIt->second.max = std::max(rangeIt->second.max, static_cast<double>(center));
@@ -2044,8 +2247,12 @@ namespace mmw_preview
             if (range.min == range.max) {
                 continue;
             }
+            if (speedMismatchedSimultaneousTicks.contains(tick)) {
+                continue;
+            }
             const double targetTime = accumulateScaledDuration(tick, TICKS_PER_BEAT, score.tempoChanges, score.hiSpeedChanges);
-            drawData.drawingLines.push_back({range, {targetTime - getNoteDuration(drawData.noteSpeed), targetTime}});
+            const float visibleDuration = simultaneousDurations.at(tick);
+            drawData.drawingLines.push_back({range, {targetTime - visibleDuration, targetTime}, visibleDuration});
         }
 
         for (auto it = score.holdNotes.rbegin(); it != score.holdNotes.rend(); ++it) {
@@ -2182,11 +2389,10 @@ namespace mmw_preview
     void drawHoldCurves(double currentTime, double currentScaledTime)
     {
         const float totalTime = std::max(accumulateDuration(gRuntime.drawData.maxTicks, TICKS_PER_BEAT, gRuntime.score.tempoChanges), 0.0001f);
-        const float noteDuration = getNoteDuration(gRuntime.config.noteSpeed);
-        const double visibleScaledTime = currentScaledTime + noteDuration;
         const float mirror = gRuntime.config.mirror ? -1.0f : 1.0f;
 
         for (const auto& segment : gRuntime.drawData.drawingHoldSegments) {
+            const double visibleScaledTime = currentScaledTime + segment.visibleDuration;
             if ((std::min(segment.headTime, segment.tailTime) > visibleScaledTime && segment.startTime > currentTime) || currentTime >= segment.endTime) {
                 continue;
             }
@@ -2221,7 +2427,7 @@ namespace mmw_preview
             }
 
             int steps = (segment.ease == EaseType::Linear ? 10 : 15)
-                + static_cast<int>(std::log(std::max((segmentEndScaled - segmentStartScaled) / noteDuration, 4.5399e-5)) + 0.5);
+                + static_cast<int>(std::log(std::max((segmentEndScaled - segmentStartScaled) / segment.visibleDuration, 4.5399e-5)) + 0.5);
             steps = std::max(steps, 1);
             const auto ease = getEaseFunction(segment.ease);
             float startLeft = segment.headLeft;
@@ -2260,14 +2466,14 @@ namespace mmw_preview
 
             double fromPercentage = 0.0;
             double stepStartScaled = segmentStartScaled;
-            double stepTop = approach(stepStartScaled - noteDuration, stepStartScaled, currentScaledTime);
+            double stepTop = approach(stepStartScaled - segment.visibleDuration, stepStartScaled, currentScaledTime);
             double stepStartProgress = segmentStartProgress;
             const float alpha = segment.isGuide ? gRuntime.config.guideAlpha : gRuntime.config.holdAlpha;
             const int zIndex = getZIndex(segment.isGuide ? SpriteLayer::GUIDE_PATH : SpriteLayer::HOLD_PATH, holdStartCenter, static_cast<float>(segment.activeTime / totalTime));
             for (int i = 0; i < steps; ++i) {
                 const double toPercentage = static_cast<double>(i + 1) / steps;
                 const double stepEndScaled = lerpD(segmentStartScaled, segmentEndScaled, toPercentage);
-                const double stepBottom = approach(stepEndScaled - noteDuration, stepEndScaled, currentScaledTime);
+                const double stepBottom = approach(stepEndScaled - segment.visibleDuration, stepEndScaled, currentScaledTime);
                 const double stepEndProgress = lerpD(segmentStartProgress, segmentEndProgress, toPercentage);
 
                 const float stepStartLeft = ease(startLeft, endLeft, static_cast<float>(stepStartProgress));

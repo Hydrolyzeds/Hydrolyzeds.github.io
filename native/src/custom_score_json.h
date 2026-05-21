@@ -14,6 +14,7 @@ namespace custom_score_json
         int nextConnectionId{-1};
         int direction{};
         int noteLineType{};
+        float speedRatio{1.0f};
         bool critical{};
         bool isSkip{};
     };
@@ -177,6 +178,11 @@ namespace custom_score_json
         return EaseType::Linear;
     }
 
+    [[nodiscard]] float sanitizeSpeedRatio(float speedRatio)
+    {
+        return std::isfinite(speedRatio) && speedRatio > 0.0f ? speedRatio : 1.0f;
+    }
+
     [[nodiscard]] RawNote readNote(const nlohmann::json& json)
     {
         return RawNote{
@@ -190,6 +196,7 @@ namespace custom_score_json
             toInt(json, "nextConnectionId", -1),
             toInt(json, "direction"),
             toInt(json, "noteLineType"),
+            sanitizeSpeedRatio(toFloat(json, "speedRatio", 1.0f)),
             toBool(json, "type"),
             toBool(json, "isSkip"),
         };
@@ -206,6 +213,7 @@ namespace custom_score_json
         note.tick = raw.ticks;
         note.lane = lane(raw);
         note.width = width(raw);
+        note.speedRatio = raw.speedRatio;
         note.critical = forceCritical || raw.critical;
         note.friction = isTraceNote(raw);
         if (isFlickNote(raw) || isTraceFlickNote(raw) || raw.direction == 1 || raw.direction == 2) {
@@ -319,6 +327,7 @@ namespace custom_score_json
             note.tick = raw.ticks;
             note.lane = lane(raw);
             note.width = width(raw);
+            note.speedRatio = raw.speedRatio;
             note.critical = raw.critical;
             note.friction = isTraceNote(raw);
             if (isFlickNote(raw) || isTraceFlickNote(raw) || raw.direction == 1 || raw.direction == 2) {
@@ -362,6 +371,7 @@ namespace custom_score_json
         gNextID = 1;
         Score score{};
         score.metadata.musicOffset = normalizedOffsetMs;
+        score.seVolumeChanges.clear();
 
         const auto eventList = json.find("MusicScoreEventDataList");
         if (eventList != json.end() && eventList->is_array()) {
@@ -370,8 +380,10 @@ namespace custom_score_json
                 const int tick = toInt(event, "ticks");
                 if (type == 0) {
                     score.tempoChanges.push_back({tick, toFloat(event, "changeValue", 120.0f)});
-                } else if (type == 2) {
+                } else if (type == 1) {
                     score.hiSpeedChanges.push_back({tick, toFloat(event, "changeValue", 1.0f)});
+                } else if (type == 2) {
+                    score.seVolumeChanges.push_back({tick, sanitizeSEVolume(toFloat(event, "changeValue", 1.0f))});
                 }
             }
         }
@@ -382,6 +394,9 @@ namespace custom_score_json
             return left.tick < right.tick;
         });
         std::stable_sort(score.hiSpeedChanges.begin(), score.hiSpeedChanges.end(), [](const HiSpeedChange& left, const HiSpeedChange& right) {
+            return left.tick < right.tick;
+        });
+        std::stable_sort(score.seVolumeChanges.begin(), score.seVolumeChanges.end(), [](const SEVolumeChange& left, const SEVolumeChange& right) {
             return left.tick < right.tick;
         });
 

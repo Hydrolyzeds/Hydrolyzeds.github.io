@@ -2306,7 +2306,7 @@ void main() {
     {
         const int count = getHitEventCount();
         const float* packed = getHitEventBufferPointer();
-        const int stride = 6;
+        const int stride = 7;
 
         std::ofstream output(filePath, std::ios::binary);
         if (!output.is_open()) {
@@ -2320,13 +2320,15 @@ void main() {
             const int flags = static_cast<int>(std::lround(packed[offset + 4]));
             const bool critical = (flags & 1) != 0;
             const float endTimeSec = packed[offset + 5];
+            const float volume = packed[offset + 6];
 
             output << "    {\n";
             output << "      \"timeSec\": " << packed[offset + 0] << ",\n";
             output << "      \"center\": " << packed[offset + 1] << ",\n";
             output << "      \"width\": " << packed[offset + 2] << ",\n";
             output << "      \"kind\": \"" << jsonEscape(hitKindToString(kindValue)) << "\",\n";
-            output << "      \"critical\": " << (critical ? "true" : "false");
+            output << "      \"critical\": " << (critical ? "true" : "false") << ",\n";
+            output << "      \"volume\": " << volume;
             if (endTimeSec >= 0.0f) {
                 output << ",\n      \"endTimeSec\": " << endTimeSec << "\n";
             } else {
@@ -3535,7 +3537,7 @@ void main() {
     {
         const int count = getHitEventCount();
         const float* packed = getHitEventBufferPointer();
-        const int stride = 6;
+        const int stride = 7;
         int low = 0;
         int high = count;
         while (low < high) {
@@ -3556,7 +3558,7 @@ void main() {
     {
         const int count = getHitEventCount();
         const float* packed = getHitEventBufferPointer();
-        const int stride = 6;
+        const int stride = 7;
         for (int index = 0; index < count; ++index) {
             const int offset = index * stride;
             const float kind = packed[offset + 3];
@@ -3568,9 +3570,10 @@ void main() {
             if (eventTimeSec < chartTimeSec - 0.0001f && endTimeSec > chartTimeSec + 0.0001f) {
                 const bool critical = (static_cast<int>(std::lround(packed[offset + 4])) & 1) != 0;
                 const char* key = resolveKeySoundKey(5, critical);
+                const double gain = keySoundGain(key) * std::max(0.0f, packed[offset + 6]);
                 jsAudioTriggerExtendable(
                     key,
-                    keySoundGain(key),
+                    gain,
                     gPlayer.effectiveLeadInSec + chartTimeSec,
                     gPlayer.effectiveLeadInSec + endTimeSec,
                     NOTE_AUDIO_DELAY_SEC);
@@ -3595,7 +3598,7 @@ void main() {
     {
         const int count = getHitEventCount();
         const float* packed = getHitEventBufferPointer();
-        const int stride = 6;
+        const int stride = 7;
         const float audioLookAheadSec = AUDIO_LOOK_AHEAD_SEC * static_cast<float>(gPlayer.playbackRate);
         const float fromTriggerSec = fromChartSec + audioLookAheadSec;
         const float toTriggerSec = toChartSec + audioLookAheadSec;
@@ -3609,15 +3612,16 @@ void main() {
                 const int kindValue = static_cast<int>(std::lround(packed[offset + 3]));
                 const bool critical = (static_cast<int>(std::lround(packed[offset + 4])) & 1) != 0;
                 const char* key = resolveKeySoundKey(kindValue, critical);
+                const double gain = keySoundGain(key) * std::max(0.0f, packed[offset + 6]);
                 if (kindValue == 5) {
                     jsAudioTriggerExtendable(
                         key,
-                        keySoundGain(key),
+                        gain,
                         gPlayer.effectiveLeadInSec + toChartSec,
                         gPlayer.effectiveLeadInSec + packed[offset + 5],
                         NOTE_AUDIO_DELAY_SEC);
                 } else {
-                    jsAudioTriggerOneShot(key, keySoundGain(key), NOTE_AUDIO_DELAY_SEC);
+                    jsAudioTriggerOneShot(key, gain, NOTE_AUDIO_DELAY_SEC);
                 }
             }
             gPlayer.nextHitEventIndex += 1;
