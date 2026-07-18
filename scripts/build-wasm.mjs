@@ -2,8 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 
-const projectRoot = '/Users/watagashi/Documents/Code/sekai-mmw-preview-web'
+// Was previously hardcoded to the original author's own machine
+// ('/Users/watagashi/Documents/Code/sekai-mmw-preview-web'), which made the
+// build fail for anyone else. This resolves the repo root relative to this
+// script's own location instead, so it works from any checkout path.
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const generatedDir = path.join(projectRoot, 'src/generated')
 const publicWasmDir = path.join(projectRoot, 'public/wasm')
 const wasmManifestFile = path.join(generatedDir, 'mmwWasmAsset.ts')
