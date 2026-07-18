@@ -1,0 +1,85 @@
+name: Build (wasm + web) and deploy to Pages
+
+# Builds the project on GitHub's own servers, so nobody needs Emscripten
+# installed locally, then publishes the result to GitHub Pages automatically.
+#
+# IMPORTANT: for the published site to work with zero extra code changes,
+# this repo needs to be a GitHub "user page" repo -- i.e. named exactly
+# "<your-username>.github.io" -- so it's served at the domain root instead
+# of a "/repo-name/" subpath. (The app has ~50 hardcoded root-relative asset
+# paths like "/assets/mmw/..."; a subpath deployment would need every one of
+# those rewritten too, which isn't done here.)
+#
+# One-time setup after pushing this workflow:
+#   Repo Settings -> Pages -> Source -> "GitHub Actions"
+
+"on":
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Emscripten
+        uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Compile the wasm module
+        run: npm run build:wasm
+
+      - name: Build the site
+        run: npx vite build
+        # Note: intentionally not running "npm run build" (which chains
+        # sync:mmw first) -- sync:mmw copies assets from a handful of the
+        # original author's other local projects that live only on their own
+        # machine and aren't part of this repo. Those assets are already
+        # committed under public/assets/mmw, so re-syncing isn't needed here.
+
+      - name: Upload dist as a plain downloadable artifact too
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 14
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
