@@ -6,8 +6,11 @@ import path from 'node:path'
 import vm from 'node:vm'
 import { spawn } from 'node:child_process'
 import { chromium } from 'playwright'
+import { fileURLToPath } from 'node:url'
 
-const projectRoot = '/Users/watagashi/Documents/Code/sekai-mmw-preview-web'
+// Same portability fix as build-wasm.mjs: was hardcoded to the original
+// author's own machine path.
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const apVideoPath = path.join(projectRoot, 'public/assets/mmw/overlay/ap.mp4')
 const defaultPort = Number(process.env.MMW_RENDER_PORT ?? 41731)
 const chromiumGpuLaunchArgs = [
