@@ -1288,6 +1288,12 @@ input[type="range"] {
   font-size: 0.9rem;
 }
 
+.local-loader-hint {
+  margin-top: 4px;
+  color: rgba(225, 236, 247, 0.55);
+  font-size: 0.78rem;
+}
+
 .local-loader-form {
   margin-top: 10px;
 }
