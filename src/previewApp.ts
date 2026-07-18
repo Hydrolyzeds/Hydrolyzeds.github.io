@@ -275,6 +275,13 @@ app.innerHTML = `
                     <td><input id="local-cover-input" type="file" accept="image/*" /></td>
                   </tr>
                   <tr>
+                    <th><label for="local-custom-bg-input">自定义背景图（可选）</label></th>
+                    <td>
+                      <input id="local-custom-bg-input" type="file" accept="image/*" />
+                      <div class="local-loader-hint">设置后将替换默认背景，且不再使用曲绘生成背景</div>
+                    </td>
+                  </tr>
+                  <tr>
                     <th><label for="local-offset-input">offset（ms）</label></th>
                     <td><input id="local-offset-input" type="text" inputmode="decimal" placeholder="例如 9000" /></td>
                   </tr>
@@ -385,6 +392,7 @@ const localLoaderForm = app.querySelector<HTMLFormElement>('#local-loader-form')
 const localSusInput = app.querySelector<HTMLInputElement>('#local-sus-input')!
 const localBgmInput = app.querySelector<HTMLInputElement>('#local-bgm-input')!
 const localCoverInput = app.querySelector<HTMLInputElement>('#local-cover-input')!
+const localCustomBgInput = app.querySelector<HTMLInputElement>('#local-custom-bg-input')!
 const localOffsetInput = app.querySelector<HTMLInputElement>('#local-offset-input')!
 const localDifficultyInput = app.querySelector<HTMLInputElement>('#local-difficulty-input')!
 const localTitleInput = app.querySelector<HTMLInputElement>('#local-title-input')!
@@ -464,6 +472,7 @@ let currentSnapshot: WasmPlayerSnapshot = { ...EMPTY_SNAPSHOT }
 let resourceWarningMessage = ''
 let sessionWarningMessage = ''
 let staticResourcesPromise: Promise<void> | null = null
+let originalBackgroundOverlayBytes: Uint8Array | null = null
 let pendingPlayAfterUnlock = false
 let postMessageLoadSerial = 0
 let postMessageLoaderInstalled = false
@@ -1073,6 +1082,9 @@ async function ensureStaticResourcesLoaded() {
         updateProgress(entry.label, entry.url, bytes.byteLength, bytes.byteLength)
       }
       if (entry.kind === 'asset') {
+        if (entry.key === 'background_overlay.png') {
+          originalBackgroundOverlayBytes = bytes
+        }
         await player.preloadAsset(entry.key, bytes)
         return
       }
@@ -1513,11 +1525,24 @@ async function handleLocalLoaderSubmit(event: SubmitEvent) {
 
   setLocalLoaderBusy(true)
   try {
+    const customBgFile = localCustomBgInput.files?.[0] ?? null
+    if (customBgFile) {
+      // Overriding the same asset key the wasm already preloaded at bootstrap.
+      // Passing coverFile: null below keeps the native code on its existing
+      // "no cover -> use background_overlay.png" fallback path, so this override
+      // actually gets used instead of the cover-composed background.
+      const customBgBytes = toBytes(await customBgFile.arrayBuffer())
+      await player.preloadAsset('background_overlay.png', customBgBytes)
+    } else if (originalBackgroundOverlayBytes) {
+      // No custom background selected this time -- make sure a previous
+      // submission's override (if any) doesn't linger.
+      await player.preloadAsset('background_overlay.png', originalBackgroundOverlayBytes)
+    }
     await loadPreviewFromLocalInput({
       susFile,
       scoreFormat: inferScoreFormatFromFile(susFile),
       bgmFile: localBgmInput.files?.[0] ?? null,
-      coverFile: localCoverInput.files?.[0] ?? null,
+      coverFile: customBgFile ? null : (localCoverInput.files?.[0] ?? null),
       rawOffsetMs: readOptionalOffsetMsInput(localOffsetInput),
       title: readOptionalTextInput(localTitleInput),
       lyricist: readOptionalTextInput(localLyricistInput),
