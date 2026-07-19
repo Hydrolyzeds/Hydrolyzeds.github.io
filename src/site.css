@@ -274,6 +274,13 @@ html, body, #app {
   line-height: 1.5;
 }
 
+.upload-hint {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
 .upload-form { display: grid; gap: 20px; }
 .upload-grid {
   display: grid; gap: 20px;
