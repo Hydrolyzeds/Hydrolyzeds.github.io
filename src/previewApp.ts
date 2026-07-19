@@ -55,6 +55,7 @@ type BootLocalPayload = {
   scoreFormat?: ScoreTextFormat
   bgmFile: File | null
   coverFile: File | null
+  customBackgroundFile: File | null
   rawOffsetMs: number | null
   title: string | null
   lyricist: string | null
@@ -1483,30 +1484,45 @@ function installPostMessageLoader() {
 }
 
 async function loadPreviewFromLocalInput(input: LocalPreviewInput) {
-  const scoreFormat = input.scoreFormat ?? inferScoreFormatFromFile(input.susFile)
+  if (input.customBackgroundFile) {
+    // Overriding the same asset key the wasm already preloaded at bootstrap.
+    // Effective coverFile is treated as absent below, which keeps the native
+    // code on its existing "no cover -> use background_overlay.png" fallback
+    // path, so this override actually gets used instead of a cover-composed
+    // background.
+    const customBgBytes = toBytes(await input.customBackgroundFile.arrayBuffer())
+    await player.preloadAsset('background_overlay.png', customBgBytes)
+  } else if (originalBackgroundOverlayBytes) {
+    // No custom background this time -- make sure a previous session's
+    // override (if any) doesn't linger.
+    await player.preloadAsset('background_overlay.png', originalBackgroundOverlayBytes)
+  }
+  const effectiveInput: LocalPreviewInput = input.customBackgroundFile ? { ...input, coverFile: null } : input
+
+  const scoreFormat = effectiveInput.scoreFormat ?? inferScoreFormatFromFile(effectiveInput.susFile)
   const [scoreText, bgmBytes, coverBytes] = await Promise.all([
-    input.susFile.text(),
-    input.bgmFile ? input.bgmFile.arrayBuffer().then(toBytes) : Promise.resolve<Uint8Array | null>(null),
-    input.coverFile ? input.coverFile.arrayBuffer().then(toBytes) : Promise.resolve<Uint8Array | null>(null),
+    effectiveInput.susFile.text(),
+    effectiveInput.bgmFile ? effectiveInput.bgmFile.arrayBuffer().then(toBytes) : Promise.resolve<Uint8Array | null>(null),
+    effectiveInput.coverFile ? effectiveInput.coverFile.arrayBuffer().then(toBytes) : Promise.resolve<Uint8Array | null>(null),
   ])
 
-  if (typeof input.showLockControlsButton === 'boolean') {
-    localShowLockInput.checked = input.showLockControlsButton
-    setLockControlsButtonVisibility(input.showLockControlsButton)
+  if (typeof effectiveInput.showLockControlsButton === 'boolean') {
+    localShowLockInput.checked = effectiveInput.showLockControlsButton
+    setLockControlsButtonVisibility(effectiveInput.showLockControlsButton)
   }
 
   const params: UrlPreviewParams = {
-    sus: scoreFormat === 'custom-score-json' ? '' : `local:///${encodeURIComponent(input.susFile.name || 'chart.sus')}`,
-    customScoreJson: scoreFormat === 'custom-score-json' ? `local:///${encodeURIComponent(input.susFile.name || 'chart.json')}` : null,
-    bgm: input.bgmFile ? `local:///${encodeURIComponent(input.bgmFile.name || 'song')}` : null,
-    cover: input.coverFile ? `local:///${encodeURIComponent(input.coverFile.name || 'cover')}` : null,
-    rawOffsetMs: input.rawOffsetMs,
-    title: input.title,
-    lyricist: input.lyricist,
-    composer: input.composer,
-    arranger: input.arranger,
-    vocal: input.vocal,
-    difficulty: input.difficulty,
+    sus: scoreFormat === 'custom-score-json' ? '' : `local:///${encodeURIComponent(effectiveInput.susFile.name || 'chart.sus')}`,
+    customScoreJson: scoreFormat === 'custom-score-json' ? `local:///${encodeURIComponent(effectiveInput.susFile.name || 'chart.json')}` : null,
+    bgm: effectiveInput.bgmFile ? `local:///${encodeURIComponent(effectiveInput.bgmFile.name || 'song')}` : null,
+    cover: effectiveInput.coverFile ? `local:///${encodeURIComponent(effectiveInput.coverFile.name || 'cover')}` : null,
+    rawOffsetMs: effectiveInput.rawOffsetMs,
+    title: effectiveInput.title,
+    lyricist: effectiveInput.lyricist,
+    composer: effectiveInput.composer,
+    arranger: effectiveInput.arranger,
+    vocal: effectiveInput.vocal,
+    difficulty: effectiveInput.difficulty,
     description1: null,
     description2: null,
     extra: null,
@@ -1525,24 +1541,12 @@ async function handleLocalLoaderSubmit(event: SubmitEvent) {
 
   setLocalLoaderBusy(true)
   try {
-    const customBgFile = localCustomBgInput.files?.[0] ?? null
-    if (customBgFile) {
-      // Overriding the same asset key the wasm already preloaded at bootstrap.
-      // Passing coverFile: null below keeps the native code on its existing
-      // "no cover -> use background_overlay.png" fallback path, so this override
-      // actually gets used instead of the cover-composed background.
-      const customBgBytes = toBytes(await customBgFile.arrayBuffer())
-      await player.preloadAsset('background_overlay.png', customBgBytes)
-    } else if (originalBackgroundOverlayBytes) {
-      // No custom background selected this time -- make sure a previous
-      // submission's override (if any) doesn't linger.
-      await player.preloadAsset('background_overlay.png', originalBackgroundOverlayBytes)
-    }
     await loadPreviewFromLocalInput({
       susFile,
       scoreFormat: inferScoreFormatFromFile(susFile),
       bgmFile: localBgmInput.files?.[0] ?? null,
-      coverFile: customBgFile ? null : (localCoverInput.files?.[0] ?? null),
+      coverFile: localCoverInput.files?.[0] ?? null,
+      customBackgroundFile: localCustomBgInput.files?.[0] ?? null,
       rawOffsetMs: readOptionalOffsetMsInput(localOffsetInput),
       title: readOptionalTextInput(localTitleInput),
       lyricist: readOptionalTextInput(localLyricistInput),
