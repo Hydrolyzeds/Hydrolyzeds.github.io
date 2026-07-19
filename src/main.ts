@@ -6,6 +6,7 @@ type LocalBootPayload = {
   scoreFormat?: 'sus' | 'custom-score-json'
   bgmFile: File | null
   coverFile: File | null
+  customBackgroundFile: File | null
   rawOffsetMs: number | null
   title: string | null
   lyricist: string | null
@@ -159,6 +160,11 @@ function renderUploadPage() {
             <label for="upload-cover">曲绘（可选）</label>
             <input id="upload-cover" type="file" accept="image/*" />
           </div>
+          <div class="upload-row file">
+            <label for="upload-custom-bg">自定义背景图（可选）</label>
+            <input id="upload-custom-bg" type="file" accept="image/*" />
+            <p class="upload-hint">设置后将替换默认背景，且不再使用曲绘生成背景</p>
+          </div>
           <div class="upload-row">
             <label for="upload-offset">offset(ms)</label>
             <input id="upload-offset" type="text" inputmode="decimal" placeholder="例如 9000" />
@@ -214,6 +220,7 @@ function renderUploadPage() {
   const susInput = app.querySelector<HTMLInputElement>('#upload-sus')!
   const bgmInput = app.querySelector<HTMLInputElement>('#upload-bgm')!
   const coverInput = app.querySelector<HTMLInputElement>('#upload-cover')!
+  const customBgInput = app.querySelector<HTMLInputElement>('#upload-custom-bg')!
   const offsetInput = app.querySelector<HTMLInputElement>('#upload-offset')!
   const diffInput = app.querySelector<HTMLSelectElement>('#upload-diff')!
   const titleInput = app.querySelector<HTMLInputElement>('#upload-title')!
@@ -242,6 +249,7 @@ function renderUploadPage() {
       scoreFormat: susFile.name.toLowerCase().endsWith('.json') ? 'custom-score-json' : 'sus',
       bgmFile: bgmInput.files?.[0] ?? null,
       coverFile: coverInput.files?.[0] ?? null,
+      customBackgroundFile: customBgInput.files?.[0] ?? null,
       rawOffsetMs: readOptionalOffset(offsetInput),
       title: readOptionalText(titleInput),
       lyricist: readOptionalText(lyricistInput),
